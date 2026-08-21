@@ -1,0 +1,44 @@
+name: Validate
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA in colorfulbutterflies/Idol-Hours to validate"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.event.inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private repo at the requested SHA
+        uses: actions/checkout@v4
+        with:
+          repository: colorfulbutterflies/Idol-Hours
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+          path: idol-hours
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: idol-hours/app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: idol-hours/app
+        run: npm ci
+
+      - name: Validate (typecheck, arch, tests, build, skills lint)
+        working-directory: idol-hours/app
+        run: npm run validate:pr

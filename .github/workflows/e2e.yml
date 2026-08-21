@@ -1,0 +1,48 @@
+name: E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA in colorfulbutterflies/Idol-Hours to test"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.inputs.sha }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private repo at the requested SHA
+        uses: actions/checkout@v4
+        with:
+          repository: colorfulbutterflies/Idol-Hours
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
+          persist-credentials: false
+          path: idol-hours
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: idol-hours/app/package-lock.json
+
+      - name: Install dependencies
+        working-directory: idol-hours/app
+        run: npm ci
+
+      - name: Install Playwright (chromium)
+        working-directory: idol-hours/app
+        run: npx playwright install --with-deps chromium
+
+      - name: Critical-journey E2E
+        working-directory: idol-hours/app
+        run: npm run test:e2e
