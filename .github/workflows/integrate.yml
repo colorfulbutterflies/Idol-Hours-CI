@@ -1,0 +1,106 @@
+name: Integrate (queue drain — Option B)
+
+# Public harness lander — runs on free public minutes.
+# Serializes all landings to private Idol-Hours main via GH concurrency.
+# Triggered by private repo's dispatch-public-ci.mjs (gh or PAT) or manually.
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Pinned SHA to land (from agent:submit queue)"
+        required: true
+        type: string
+      slug:
+        description: "Workstream slug"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrate-main
+  cancel-in-progress: false
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout private repo at pinned SHA
+        uses: actions/checkout@v4
+        with:
+          repository: colorfulbutterflies/Idol-Hours
+          ref: ${{ inputs.sha }}
+          token: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Setup Node 22 + cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install (npm ci)
+        run: npm ci
+        working-directory: app
+
+      - name: Full gate (validate:pr — typecheck + arch + tests + build)
+        run: npm run validate:pr
+        working-directory: app
+
+      - name: Land onto private main (update-ref + push)
+        env:
+          PRIVATE_REPO_TOKEN_RW: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.sha }}"
+          SLUG="${{ inputs.slug }}"
+          echo "Landing $SLUG @ $SHA"
+          git config user.name "Idol Hours Harness"
+          git config user.email "harness@idol-hours.ci"
+          git remote set-url origin "https://x-access-token:${PRIVATE_REPO_TOKEN_RW}@github.com/colorfulbutterflies/Idol-Hours.git"
+          git fetch origin main
+          ORIGIN_MAIN=$(git rev-parse origin/main)
+          echo "origin/main $ORIGIN_MAIN"
+          if [ "$ORIGIN_MAIN" = "$SHA" ]; then
+            echo "Already on main — idempotent, nothing to push"
+            exit 0
+          fi
+          if ! git cat-file -e "$SHA" 2>/dev/null; then
+            echo "::error::SHA $SHA not found in checkout"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main "$SHA"; then
+            echo "::error::SHA $SHA is not descendant of origin/main — needs rebase. Marking blocked."
+            echo "HINT: run 'git fetch origin main && git rebase origin/main $SHA' locally, then resubmit."
+            exit 1
+          fi
+          # Verify validate:pr already passed above — now move main pointer without touching working tree
+          git update-ref refs/heads/main "$SHA"
+          LOCAL_MAIN=$(git rev-parse refs/heads/main)
+          echo "local main $LOCAL_MAIN"
+          if [ "$LOCAL_MAIN" != "$SHA" ]; then
+            echo "::error::update-ref failed"
+            exit 1
+          fi
+          git push origin main
+          git fetch origin main
+          REMOTE_MAIN=$(git rev-parse origin/main)
+          echo "remote main $REMOTE_MAIN"
+          if [ "$REMOTE_MAIN" != "$SHA" ]; then
+            echo "::error::remote verification failed: $REMOTE_MAIN != $SHA"
+            exit 1
+          fi
+          echo "✓ Landed $SLUG @ ${SHA:0:7} — main == origin/main"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Integrate ${{ inputs.slug }} @ ${{ inputs.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SHA: \`${{ inputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Slug: \`${{ inputs.slug }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Result: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
