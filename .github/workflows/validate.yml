@@ -27,6 +27,7 @@ jobs:
           ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           fetch-depth: 0
+          lfs: true
           persist-credentials: false
           path: idol-hours
 
