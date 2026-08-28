@@ -29,16 +29,21 @@ jobs:
           persist-credentials: false
           path: idol-hours
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: idol-hours/app/package-lock.json
+          cache: pnpm
+          cache-dependency-path: idol-hours/app/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: idol-hours/app
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Validate (typecheck, arch, tests, build, skills lint)
         working-directory: idol-hours/app
-        run: npm run validate:pr
+        run: pnpm run validate:pr
