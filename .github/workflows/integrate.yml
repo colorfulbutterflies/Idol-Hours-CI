@@ -150,6 +150,7 @@ jobs:
 
       - name: Land onto private main (update-ref + push)
         env:
+          IDH_INTEGRATION_WORKER: '1'
           PRIVATE_REPO_TOKEN_RW: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
         run: |
           set -euo pipefail
