@@ -28,6 +28,7 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           persist-credentials: false
           path: idol-hours
+          fetch-depth: 0
           filter: blob:none
 
       - name: Setup pnpm
