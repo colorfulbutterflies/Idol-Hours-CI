@@ -48,7 +48,7 @@ jobs:
 
       - name: Install git hooks
         working-directory: idol-hours
-        run: node app/scripts/install-hooks.mjs || true
+        run: rm -f .git/hooks/pre-push && node app/scripts/install-hooks.mjs || true
 
       - name: Validate (typecheck, arch, tests, build, skills lint)
         working-directory: idol-hours/app
