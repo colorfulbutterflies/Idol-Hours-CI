@@ -20,24 +20,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout private repo (full history)
+      - name: Checkout private repo at the requested SHA
         uses: actions/checkout@v4
         with:
           repository: colorfulbutterflies/Idol-Hours
+          ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          persist-credentials: true
-          path: idol-hours
           fetch-depth: 0
-          filter: blob:none
-
-      - name: Checkout requested SHA
-        run: |
-          set -euo pipefail
-          SHA="${{ inputs.sha }}"
-          echo "Checking out $SHA"
-          git -C idol-hours fetch origin "$SHA" --depth=1 --filter=blob:none || git -C idol-hours fetch origin --filter=blob:none
-          git -C idol-hours checkout "$SHA"
-          git -C idol-hours rev-parse HEAD
+          persist-credentials: false
+          path: idol-hours
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -53,6 +44,10 @@ jobs:
       - name: Install dependencies
         working-directory: idol-hours/app
         run: pnpm install --frozen-lockfile
+
+      - name: Install git hooks
+        working-directory: idol-hours
+        run: node app/scripts/install-hooks.mjs || true
 
       - name: Validate (typecheck, arch, tests, build, skills lint)
         working-directory: idol-hours/app
