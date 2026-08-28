@@ -37,7 +37,6 @@ jobs:
           ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
           fetch-depth: 0
-          filter: blob:none
           persist-credentials: true
 
       - name: Circuit breaker — pause if 3 consecutive infra failures
@@ -86,7 +85,7 @@ jobs:
           git config user.email "harness@idol-hours.ci"
           # Ensure we can fetch and rebase onto latest main
           git remote set-url origin "https://x-access-token:${PRIVATE_REPO_TOKEN_RW}@github.com/colorfulbutterflies/Idol-Hours.git"
-          git fetch origin main --filter=blob:none --quiet
+          git fetch origin main --quiet
           ORIGIN_MAIN=$(git rev-parse origin/main)
           echo "origin/main $ORIGIN_MAIN"
           echo "input SHA $SHA"
