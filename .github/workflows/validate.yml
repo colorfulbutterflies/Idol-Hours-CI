@@ -25,7 +25,7 @@ jobs:
         with:
           repository: colorfulbutterflies/Idol-Hours
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
-          persist-credentials: false
+          persist-credentials: true
           path: idol-hours
           fetch-depth: 0
           filter: blob:none
