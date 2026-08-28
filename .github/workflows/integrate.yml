@@ -85,7 +85,9 @@ jobs:
           git config user.name "Idol Hours Harness"
           git config user.email "harness@idol-hours.ci"
           git reset --hard HEAD
-          git clean -fd
+          git clean -fdx
+          git lfs checkout 2>/dev/null || true
+          git lfs pull 2>/dev/null || true
           # Ensure we can fetch and rebase onto latest main
           git remote set-url origin "https://x-access-token:${PRIVATE_REPO_TOKEN_RW}@github.com/colorfulbutterflies/Idol-Hours.git"
           git fetch origin main --quiet
