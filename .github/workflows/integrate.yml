@@ -138,6 +138,9 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: app
 
+      - name: Install git hooks
+        run: rm -f .git/hooks/pre-push && node app/scripts/install-hooks.mjs || true
+
       - name: Full gate (validate:pr — typecheck + arch + tests + build)
         run: pnpm run validate:pr
         working-directory: app
