@@ -3,6 +3,8 @@ name: Integrate (queue drain — Option B)
 # Public harness lander — runs on free public minutes.
 # Serializes all landings to private Idol-Hours main via GH concurrency.
 # Triggered by private repo's dispatch-public-ci.mjs (gh or PAT) or manually.
+# 2026-08-28 repair: auto-rebase stale siblings, blobless checkout, pnpm cache,
+# 45m timeout, post-land validate + e2e, circuit breaker.
 
 on:
   workflow_dispatch:
@@ -26,7 +28,7 @@ concurrency:
 jobs:
   integrate:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout private repo at pinned SHA
         uses: actions/checkout@v4
@@ -35,7 +37,91 @@ jobs:
           ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: true
+
+      - name: Circuit breaker — pause if 3 consecutive infra failures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Check last 3 Integrate runs for repeated infra failures (e.g., Setup Node cache).
+          # This prevents noise when the harness itself is broken.
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh not available — skipping circuit breaker"
+            exit 0
+          fi
+          # Fetch last 5 runs
+          RECENT=$(gh api repos/colorfulbutterflies/Idol-Hours-CI/actions/workflows/integrate.yml/runs --jq '.workflow_runs[:5] | .[] | "\(.conclusion) \(.name)"' 2>/dev/null | head -n 5 || true)
+          FAIL_COUNT=$(echo "$RECENT" | grep -c "^failure" || true)
+          echo "Recent Integrate runs:"
+          echo "$RECENT"
+          echo "Failures in last 5: $FAIL_COUNT"
+          if [ "$FAIL_COUNT" -ge 3 ]; then
+            # Only trip breaker if the failures were infra (Setup Node / pnpm) not code validation.
+            # We check the most recent failure's jobs for "Setup Node" or "Setup pnpm" failure.
+            echo "::warning::3+ recent failures detected — inspecting for infra pattern..."
+            LATEST_ID=$(gh api repos/colorfulbutterflies/Idol-Hours-CI/actions/workflows/integrate.yml/runs --jq '.workflow_runs[0].id' 2>/dev/null || echo "")
+            if [ -n "$LATEST_ID" ]; then
+              STEPS=$(gh api repos/colorfulbutterflies/Idol-Hours-CI/actions/runs/$LATEST_ID/jobs --jq '.jobs[0].steps[] | "\(.name):\(.conclusion)"' 2>/dev/null | head -n 20 || true)
+              echo "$STEPS"
+              if echo "$STEPS" | grep -q "Setup Node.*failure\|Setup pnpm.*failure\|Install.*failure"; then
+                echo "::error::Circuit breaker OPEN — last 3+ runs failed at infra (Setup Node/pnpm). Fix workflow config before dispatching. Not retrying $SLUG."
+                echo "HINT: Check Idol-Hours-CI workflows use pnpm/action-setup@v4 + cache: pnpm + app/pnpm-lock.yaml"
+                exit 1
+              fi
+            fi
+            echo "Failures appear to be code validation failures, not infra — continuing."
+          fi
+
+      - name: Auto-rebase if stale (handle parallel siblings)
+        id: rebase
+        env:
+          PRIVATE_REPO_TOKEN_RW: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.sha }}"
+          SLUG="${{ inputs.slug }}"
+          git config user.name "Idol Hours Harness"
+          git config user.email "harness@idol-hours.ci"
+          # Ensure we can fetch and rebase onto latest main
+          git remote set-url origin "https://x-access-token:${PRIVATE_REPO_TOKEN_RW}@github.com/colorfulbutterflies/Idol-Hours.git"
+          git fetch origin main --filter=blob:none --quiet
+          ORIGIN_MAIN=$(git rev-parse origin/main)
+          echo "origin/main $ORIGIN_MAIN"
+          echo "input SHA $SHA"
+          if [ "$ORIGIN_MAIN" = "$SHA" ]; then
+            echo "Already on main — idempotent"
+            echo "landed_sha=$SHA" >> $GITHUB_OUTPUT
+            echo "rebased=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if ! git cat-file -e "$SHA" 2>/dev/null; then
+            echo "::error::SHA $SHA not found in checkout"
+            exit 1
+          fi
+          if git merge-base --is-ancestor origin/main "$SHA"; then
+            echo "SHA is descendant of origin/main — no rebase needed"
+            echo "landed_sha=$SHA" >> $GITHUB_OUTPUT
+            echo "rebased=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "SHA is NOT descendant of origin/main — attempting auto-rebase..."
+          # Create temp branch from SHA and rebase onto origin/main
+          git checkout -B harness-rebase-temp "$SHA"
+          if ! git rebase origin/main; then
+            echo "::error::Auto-rebase failed — conflicts need manual resolution."
+            echo "CONFLICT_SHA=$SHA is not cleanly rebased onto $ORIGIN_MAIN"
+            git rebase --abort || true
+            echo "HINT: locally run 'git fetch origin main && git rebase origin/main $SHA' and resolve, then resubmit."
+            exit 1
+          fi
+          NEW_SHA=$(git rev-parse HEAD)
+          echo "Rebased $SHA → $NEW_SHA"
+          echo "landed_sha=$NEW_SHA" >> $GITHUB_OUTPUT
+          echo "rebased=true" >> $GITHUB_OUTPUT
+          # Stay on rebased HEAD for subsequent steps (install + validate)
+          echo "Auto-rebase succeeded — validate will run on rebased SHA $NEW_SHA"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -62,29 +148,34 @@ jobs:
           PRIVATE_REPO_TOKEN_RW: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
         run: |
           set -euo pipefail
-          SHA="${{ inputs.sha }}"
+          # Use rebased SHA if we rebased, otherwise original input SHA
+          SHA="${{ steps.rebase.outputs.landed_sha }}"
+          if [ -z "$SHA" ]; then
+            SHA="${{ inputs.sha }}"
+          fi
           SLUG="${{ inputs.slug }}"
-          echo "Landing $SLUG @ $SHA"
-          git config user.name "Idol Hours Harness"
-          git config user.email "harness@idol-hours.ci"
+          REBASED="${{ steps.rebase.outputs.rebased }}"
+          echo "Landing $SLUG @ $SHA (rebased=$REBASED)"
+          # Ensure origin URL with token
           git remote set-url origin "https://x-access-token:${PRIVATE_REPO_TOKEN_RW}@github.com/colorfulbutterflies/Idol-Hours.git"
-          git fetch origin main
+          git fetch origin main --quiet
           ORIGIN_MAIN=$(git rev-parse origin/main)
           echo "origin/main $ORIGIN_MAIN"
           if [ "$ORIGIN_MAIN" = "$SHA" ]; then
             echo "Already on main — idempotent, nothing to push"
+            echo "landed_sha=$SHA" >> $GITHUB_ENV
             exit 0
           fi
+          # Safety: ensure LANDED_SHA exists and is still descendant after validation
           if ! git cat-file -e "$SHA" 2>/dev/null; then
-            echo "::error::SHA $SHA not found in checkout"
+            echo "::error::Landed SHA $SHA not found"
             exit 1
           fi
           if ! git merge-base --is-ancestor origin/main "$SHA"; then
-            echo "::error::SHA $SHA is not descendant of origin/main — needs rebase. Marking blocked."
-            echo "HINT: run 'git fetch origin main && git rebase origin/main $SHA' locally, then resubmit."
+            echo "::error::Landed SHA lost ancestor status during validation — concurrent land raced ahead. Re-queue."
             exit 1
           fi
-          # Verify validate:pr already passed above — now move main pointer without touching working tree
+          # Move main pointer without touching working tree (safe for dirty main)
           git update-ref refs/heads/main "$SHA"
           LOCAL_MAIN=$(git rev-parse refs/heads/main)
           echo "local main $LOCAL_MAIN"
@@ -93,7 +184,7 @@ jobs:
             exit 1
           fi
           git push origin main
-          git fetch origin main
+          git fetch origin main --quiet
           REMOTE_MAIN=$(git rev-parse origin/main)
           echo "remote main $REMOTE_MAIN"
           if [ "$REMOTE_MAIN" != "$SHA" ]; then
@@ -101,11 +192,57 @@ jobs:
             exit 1
           fi
           echo "✓ Landed $SLUG @ ${SHA:0:7} — main == origin/main"
+          echo "landed_sha=$SHA" >> $GITHUB_ENV
+          echo "LANDED_SHA=$SHA" >> $GITHUB_ENV
+
+      - name: Post-land verification — trigger Validate + E2E on new main
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRIVATE_REPO_TOKEN_RW: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
+        run: |
+          set -euo pipefail
+          SHA="${{ env.landed_sha }}"
+          if [ -z "$SHA" ]; then
+            SHA="${{ steps.rebase.outputs.landed_sha }}"
+          fi
+          if [ -z "$SHA" ]; then
+            SHA="${{ inputs.sha }}"
+          fi
+          echo "Triggering post-land Validate + E2E for $SHA..."
+          # Use GITHUB_TOKEN if it has workflow dispatch permission, else fall back to PAT
+          # Harness repo needs Actions:Write for dispatch; PRIVATE_REPO_TOKEN_RW should have it.
+          TOKEN="${PRIVATE_REPO_TOKEN_RW:-$GH_TOKEN}"
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::No token available to trigger post-land workflows — skipping"
+            exit 0
+          fi
+          # Trigger Validate
+          if ! gh workflow run validate.yml --repo colorfulbutterflies/Idol-Hours-CI --field sha="$SHA" 2>&1; then
+            echo "gh trigger validate failed, trying API with PAT..."
+            curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/colorfulbutterflies/Idol-Hours-CI/actions/workflows/validate.yml/dispatches" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"sha\":\"$SHA\"}}" | head -c 500 || true
+          else
+            echo "✓ Validate dispatched for $SHA"
+          fi
+          # Trigger E2E (best-effort — always dispatch; E2E is free on public minutes)
+          if ! gh workflow run e2e.yml --repo colorfulbutterflies/Idol-Hours-CI --field sha="$SHA" 2>&1; then
+            echo "gh trigger e2e failed, trying API..."
+            curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/colorfulbutterflies/Idol-Hours-CI/actions/workflows/e2e.yml/dispatches" \
+              -d "{\"ref\":\"main\",\"inputs\":{\"sha\":\"$SHA\"}}" | head -c 500 || true
+          else
+            echo "✓ E2E dispatched for $SHA"
+          fi
+          echo "Post-land verification dispatched — check https://github.com/colorfulbutterflies/Idol-Hours-CI/actions"
 
       - name: Summary
         if: always()
         run: |
           echo "### Integrate ${{ inputs.slug }} @ ${{ inputs.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "- SHA: \`${{ inputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Input SHA: \`${{ inputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Landed SHA: \`${{ steps.rebase.outputs.landed_sha }}\` (rebased=${{ steps.rebase.outputs.rebased }})" >> $GITHUB_STEP_SUMMARY
           echo "- Slug: \`${{ inputs.slug }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Result: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Post-land: Validate + E2E dispatched if land succeeded" >> $GITHUB_STEP_SUMMARY
