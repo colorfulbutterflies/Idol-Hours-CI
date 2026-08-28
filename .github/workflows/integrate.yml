@@ -37,7 +37,6 @@ jobs:
           ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
           fetch-depth: 0
-          lfs: true
           filter: blob:none
           persist-credentials: true
 
