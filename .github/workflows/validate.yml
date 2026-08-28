@@ -20,16 +20,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout private repo at the requested SHA
+      - name: Checkout private repo (full history + LFS)
         uses: actions/checkout@v4
         with:
           repository: colorfulbutterflies/Idol-Hours
-          ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           fetch-depth: 0
           lfs: true
-          persist-credentials: false
           path: idol-hours
+
+      - name: Checkout requested SHA
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.sha }}"
+          echo "Checking out $SHA"
+          git -C idol-hours checkout "$SHA"
+          git -C idol-hours rev-parse HEAD
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
