@@ -30,15 +30,22 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout private repo at pinned SHA
+      - name: Checkout private repo (full history + LFS)
         uses: actions/checkout@v4
         with:
           repository: colorfulbutterflies/Idol-Hours
-          ref: ${{ inputs.sha }}
           token: ${{ secrets.PRIVATE_REPO_TOKEN_RW }}
           fetch-depth: 0
           lfs: true
           persist-credentials: true
+
+      - name: Checkout requested SHA
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.sha }}"
+          echo "Checking out $SHA"
+          git checkout "$SHA"
+          git rev-parse HEAD
 
       - name: Circuit breaker — pause if 3 consecutive infra failures
         env:
