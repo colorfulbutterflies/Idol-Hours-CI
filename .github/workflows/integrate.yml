@@ -179,8 +179,8 @@ jobs:
           git fetch origin main --quiet
           ORIGIN_MAIN=$(git rev-parse origin/main)
           echo "origin/main $ORIGIN_MAIN"
-          if [ "$ORIGIN_MAIN" = "$SHA" ]; then
-            echo "Already on main — idempotent, nothing to push"
+          if [ "$ORIGIN_MAIN" = "$SHA" ] || git merge-base --is-ancestor "$SHA" origin/main; then
+            echo "Already on main (or ancestor) — idempotent, nothing to push"
             echo "landed_sha=$SHA" >> $GITHUB_ENV
             exit 0
           fi
