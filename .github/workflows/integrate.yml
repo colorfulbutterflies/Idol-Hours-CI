@@ -169,6 +169,7 @@ jobs:
           if [ -z "$SHA" ]; then
             SHA="${{ inputs.sha }}"
           fi
+          SHA=$(git rev-parse $SHA)
           SLUG="${{ inputs.slug }}"
           REBASED="${{ steps.rebase.outputs.rebased }}"
           echo "Landing $SLUG @ $SHA (rebased=$REBASED)"
